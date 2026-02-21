@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FACEIT | Standoff 2 ULTIMATE</title>
+    
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { background-color: #0b0e12; color: #e6edf3; font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .faceit-orange { color: #ff5500; }
+        .faceit-bg-orange { background-color: #ff5500; }
+        .glass-card { background: #161b22; border: 1px solid #30363d; }
+        .lvl-badge { 
+            background: #21262d; border: 2px solid #ff5500; width: 34px; height: 34px; 
+            display: flex; align-items: center; justify-content: center; 
+            font-weight: 900; border-radius: 5px; transform: rotate(45deg); flex-shrink: 0;
+        }
+        .lvl-text { transform: rotate(-45deg); font-size: 0.9rem; }
+        .btn-search { animation: pulse-orange 2s infinite; }
+        @keyframes pulse-orange {
+            0% { box-shadow: 0 0 0 0 rgba(255, 85, 0, 0.4); }
+            70% { box-shadow: 0 0 0 12px rgba(255, 85, 0, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 85, 0, 0); }
+        }
+        .map-banned { opacity: 0.15; filter: grayscale(1); pointer-events: none; }
+        .map-picked { border: 2px solid #ff5500; transform: scale(1.05); box-shadow: 0 0 20px rgba(255, 85, 0, 0.3); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Конфигурация твоего Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyC1H45w4Z49Xc7O_WZotmUzbK9kUo0SQzw",
+            authDomain: "faceit-e10c4.firebaseapp.com",
+            projectId: "faceit-e10c4",
+            storageBucket: "faceit-e10c4.firebasestorage.app",
+            messagingSenderId: "700407767739",
+            appId: "1:700407767739:web:451dc4dc141517a8c3bf9e",
+            measurementId: "G-1RBVCHNC1T"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        const { useState, useEffect } = React;
+
+        const App = () => {
+            const MAPS = ["Sandstone", "Hanami", "Province", "Dune", "Breeze", "Zone7"];
+            const [myNick, setMyNick] = useState(localStorage.getItem('faceit_nickname') || "");
+            const [userData, setUserData] = useState(null);
+            const [view, setView] = useState(myNick ? 'dashboard' : 'setup_profile');
+            const [leaderboard, setLeaderboard] = useState([]);
+            const [queue, setQueue] = useState({});
+            const [match, setMatch] = useState(null);
+            const [globalMsg, setGlobalMsg] = useState("");
+            
+            // Админ-стейты
+            const [isAdmin, setIsAdmin] = useState(false);
+            const [allUsers, setAllUsers] = useState([]);
+
+            // 1. Загрузка данных профиля и объявлений
+            useEffect(() => {
+                if (myNick) {
+                    const userRef = db.ref('users/' + myNick);
+                    userRef.on('value', snap => {
+                        if (snap.exists()) setUserData(snap.val());
+                        else {
+                            const init = { nick: myNick, elo: 100, matches: 0, wins: 0 };
+                            userRef.set(init);
+                        }
+                    });
+                }
+                db.ref('announcement').on('value', snap => setGlobalMsg(snap.val() || ""));
+                db.ref('queue').on('value', snap => setQueue(snap.val() || {}));
+                
+                // Следим за матчами для игрока
+                db.ref('active_matches').on('value', snap => {
+                    let found = null;
+                    snap.forEach(c => {
+                        const m = c.val();
+                        if (m.players && m.players.includes(myNick)) found = {id: c.key, ...m};
+                    });
+                    setMatch(found);
+                    if (found) setView('match_room');
+                });
+
+                // Таблица лидеров
+                db.ref('users').orderByChild('elo').limitToLast(10).on('value', snap => {
+                    const users = [];
+                    snap.forEach(c => { users.push(c.val()); });
+                    setLeaderboard(users.reverse());
+                });
+
+                // Данные для админа
+                db.ref('users').on('value', snap => {
+                    const u = [];
+                    snap.forEach(c => { u.push({nick: c.key, ...c.val()}); });
+                    setAllUsers(u);
+                });
+            }, [myNick]);
+
+            const getLevel = (elo) => {
+                if (elo < 300) return 1; if (elo < 600) return 2;
+                if (elo < 900) return 3; if (elo < 1200) return 4;
+                if (elo < 1500) return 5; return 10;
+            };
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                const nick = e.target.nick.value.trim().replace(/\s/g, '_');
+                if (nick.length < 3) return alert("Минимум 3 символа");
+                localStorage.setItem('faceit_nickname', nick);
+                setMyNick(nick);
+                setView('dashboard');
+            };
+
+            const startSearch = () => {
+                const playersInQueue = Object.keys(queue);
+                if (playersInQueue.length >= 1 && !playersInQueue.includes(myNick)) {
+                    const matchId = "match_" + Date.now();
+                    const players = [playersInQueue[0], myNick];
+                    db.ref('active_matches/' + matchId).set({
+                        players: players,
+                        bannedMaps: [],
+                        host: players[0],
+                        status: 'veto'
+                    });
+                    db.ref('queue/' + playersInQueue[0]).remove();
+                } else {
+                    db.ref('queue/' + myNick).set(true);
+                    setView('searching');
+                }
+            };
+
+            // ФУНКЦИИ АДМИНА
+            const adminAction = {
+                setElo: (nick, elo) => {
+                    const val = prompt(`Изменить ELO для ${nick}:`, elo);
+                    if (val) db.ref(`users/${nick}`).update({ elo: parseInt(val) });
+                },
+                deleteUser: (nick) => {
+                    if (confirm(`Удалить ${nick}?`)) db.ref(`users/${nick}`).remove();
+                },
+                broadcast: () => {
+                    const msg = prompt("Текст объявления:");
+                    db.ref('announcement').set(msg);
+                },
+                resetServer: () => {
+                    if (confirm("Сбросить все очереди?")) {
+                        db.ref('queue').remove();
+                        db.ref('active_matches').remove();
+                    }
+                }
+            };
+
+            if (view === 'setup_profile') return (
+                <div className="flex items-center justify-center min-h-screen p-6">
+                    <form onSubmit={handleLogin} className="glass-card p-10 rounded-[2.5rem] w-full max-w-sm text-center border-t-4 border-[#ff5500] shadow-2xl">
+                        <div className="w-16 h-16 faceit-bg-orange rounded-2xl flex items-center justify-center font-black italic text-4xl mx-auto mb-6">F</div>
+                        <h2 className="text-2xl font-black uppercase italic mb-2 text-white">Добро пожаловать</h2>
+                        <p className="text-gray-500 text-[10px] font-bold uppercase tracking-widest mb-8">Введи никнейм для игры</p>
+                        <input name="nick" type="text" placeholder="Твой Nickname" required className="w-full bg-black border border-gray-800 p-4 rounded-xl mb-6 outline-none focus:border-[#ff5500] font-bold text-center" />
+                        <button className="w-full faceit-bg-orange py-4 rounded-xl font-black uppercase italic shadow-lg">Войти в систему</button>
+                    </form>
+                </div>
+            );
+
+            return (
+                <div className="max-w-md mx-auto min-h-screen flex flex-col p-4 pb-28">
+                    {/* Header */}
+                    <header className="flex justify-between items-center py-6 px-2">
+                        <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('dashboard')}>
+                            <div className="w-10 h-10 faceit-bg-orange rounded-lg flex items-center justify-center font-black text-2xl italic shadow-lg">F</div>
+                            <span className="font-black text-xl italic uppercase tracking-tighter">Faceit <span className="text-[10px] text-gray-500">v2.0</span></span>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={() => {
+                                const p = prompt("Пароль админа:");
+                                if(p === "1234") { setIsAdmin(true); setView('admin'); }
+                            }} className="text-[10px] font-bold text-gray-700 uppercase">A</button>
+                        </div>
+                    </header>
+
+                    {/* Объявление */}
+                    {globalMsg && (
+                        <div className="bg-[#ff5500]/10 border border-[#ff5500]/30 p-4 rounded-2xl mb-6 flex items-center gap-4 animate-in slide-in-from-top">
+                            <span className="text-xl">📢</span>
+                            <p className="text-[11px] font-black uppercase italic text-[#ff5500] leading-tight">{globalMsg}</p>
+                            <button onClick={() => db.ref('announcement').remove()} className="ml-auto text-gray-500">×</button>
+                        </div>
+                    )}
+
+                    <main className="flex-1">
+                        {view === 'dashboard' && (
+                            <div className="space-y-6 animate-in fade-in duration-500">
+                                <div className="glass-card p-10 rounded-[2.5rem] border-l-[12px] border-[#ff5500] relative overflow-hidden shadow-xl">
+                                    <h2 className="text-4xl font-black italic uppercase mb-2 leading-none">Играть</h2>
+                                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-[0.3em] mb-8">В очереди: {Object.keys(queue).length} чел.</p>
+                                    <button onClick={startSearch} className="faceit-bg-orange px-10 py-4 rounded-2xl font-black italic uppercase btn-search hover:scale-105 transition-transform">Найти матч</button>
+                                </div>
+
+                                {/* Таблица лидеров */}
+                                <div className="glass-card rounded-3xl overflow-hidden shadow-2xl">
+                                    <div className="p-5 bg-white/5 border-b border-gray-800 flex justify-between items-center">
+                                        <span className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Топ игроков</span>
+                                        <span className="text-[10px] font-black faceit-orange uppercase italic animate-pulse">Live Ranking</span>
+                                    </div>
+                                    <div className="p-2 divide-y divide-gray-800/50">
+                                        {leaderboard.map((u, i) => (
+                                            <div key={i} className="flex items-center gap-4 p-4">
+                                                <span className="w-4 font-black text-gray-700 text-[10px] italic">{i + 1}</span>
+                                                <div className="lvl-badge"><span className="lvl-text">{getLevel(u.elo)}</span></div>
+                                                <span className={`font-bold text-sm ${u.nick === myNick ? 'faceit-orange' : ''}`}>{u.nick}</span>
+                                                <div className="ml-auto text-right">
+                                                    <span className="font-mono font-black text-sm block leading-none">{u.elo}</span>
+                                                    <span className="text-[8px] text-gray-600 font-bold uppercase">ELO</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'profile' && userData && (
+                            <div className="space-y-6 animate-in slide-in-from-bottom">
+                                <div className="glass-card p-8 rounded-[2.5rem] flex items-center gap-6 border-b-4 border-[#ff5500]">
+                                    <div className="lvl-badge scale-125"><span className="lvl-text">{getLevel(userData.elo)}</span></div>
+                                    <div>
+                                        <h2 className="text-3xl font-black italic uppercase tracking-tighter leading-none mb-1">{myNick}</h2>
+                                        <p className="text-[10px] text-gray-500 font-bold uppercase">Статус: Игрок</p>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="glass-card p-6 rounded-2xl text-center">
+                                        <p className="text-2xl font-black italic leading-none mb-1">{userData.elo}</p>
+                                        <p className="text-[9px] text-gray-600 font-bold uppercase">Твой рейтинг</p>
+                                    </div>
+                                    <div className="glass-card p-6 rounded-2xl text-center">
+                                        <p className="text-2xl font-black italic leading-none mb-1 text-green-500">{userData.wins}</p>
+                                        <p className="text-[9px] text-gray-600 font-bold uppercase">Побед</p>
+                                    </div>
+                                </div>
+                                <button onClick={() => {localStorage.clear(); window.location.reload();}} className="w-full py-4 text-[10px] font-bold uppercase text-gray-700 underline">Выйти из системы</button>
+                            </div>
+                        )}
+
+                        {view === 'searching' && (
+                            <div className="flex flex-col items-center justify-center py-24 text-center">
+                                <div className="w-16 h-16 border-4 border-[#ff5500] border-t-transparent rounded-full animate-spin mb-8"></div>
+                                <h2 className="text-2xl font-black uppercase italic text-[#ff5500] animate-pulse">Поиск матча...</h2>
+                                <p className="text-gray-500 mt-2 font-bold uppercase text-[9px] tracking-widest italic">Ожидайте, пока другой игрок нажмет поиск</p>
+                                <button onClick={() => {db.ref('queue/'+myNick).remove(); setView('dashboard');}} className="mt-16 text-red-500/50 text-[10px] font-black uppercase underline">Отмена</button>
+                            </div>
+                        )}
+
+                        {view === 'match_room' && match && (
+                            <div className="space-y-6 animate-in zoom-in">
+                                <div className="glass-card p-6 rounded-3xl text-center border-b-4 border-[#ff5500]">
+                                    <h2 className="text-xl font-black uppercase italic">Комната Матча</h2>
+                                    <div className="flex justify-center gap-4 mt-3">
+                                        {match.players.map(p => <div key={p} className="text-[10px] font-black uppercase bg-white/5 px-3 py-1 rounded-full border border-white/5">{p}</div>)}
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {MAPS.map(m => {
+                                        const isBanned = match.bannedMaps?.includes(m);
+                                        const isFinal = match.bannedMaps?.length === MAPS.length - 1 && !isBanned;
+                                        return (
+                                            <div key={m} onClick={() => {
+                                                const bans = match.bannedMaps || [];
+                                                if(!isBanned && bans.length < MAPS.length - 1) 
+                                                    db.ref(`active_matches/${match.id}/bannedMaps`).set([...bans, m]);
+                                            }} className={`glass-card p-6 rounded-2xl text-center cursor-pointer transition-all ${isBanned ? 'map-banned' : ''} ${isFinal ? 'map-picked' : ''}`}>
+                                                <p className="font-black uppercase italic text-[11px] leading-none mb-1">{m}</p>
+                                                {isFinal && <p className="text-[8px] faceit-orange font-black uppercase animate-pulse italic">Играем!</p>}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                                <div className="glass-card p-6 rounded-2xl text-center shadow-2xl">
+                                    <p className="text-[9px] text-gray-500 font-bold uppercase mb-2">Хост лобби (ID / Ссылка)</p>
+                                    <p className="text-2xl font-black italic text-white tracking-widest select-all uppercase">{match.host}</p>
+                                    <button onClick={() => {db.ref('active_matches/'+match.id).remove(); setView('dashboard');}} className="mt-6 text-[9px] text-gray-700 font-black uppercase underline">Завершить игру</button>
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'admin' && isAdmin && (
+                            <div className="space-y-6 animate-in fade-in">
+                                <div className="flex justify-between items-center">
+                                    <h2 className="text-2xl font-black uppercase italic faceit-orange">Панель Админа</h2>
+                                    <button onClick={() => setIsAdmin(false)} className="text-xs font-bold text-gray-600">Выход</button>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button onClick={adminAction.broadcast} className="glass-card p-4 text-[10px] font-black uppercase hover:bg-white/5 transition-colors">📢 Объявление</button>
+                                    <button onClick={adminAction.resetServer} className="glass-card p-4 text-[10px] font-black uppercase text-red-500 hover:bg-red-500/10">🧹 Очистка данных</button>
+                                </div>
+                                <div className="glass-card rounded-2xl overflow-hidden">
+                                    <table className="w-full text-[11px] text-left">
+                                        <thead className="bg-white/5 font-black uppercase text-gray-500">
+                                            <tr><th className="p-3">Игрок</th><th className="p-3">ELO</th><th className="p-3">Упр.</th></tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-800">
+                                            {allUsers.map(u => (
+                                                <tr key={u.nick} className="hover:bg-white/[0.02]">
+                                                    <td className="p-3 font-bold">{u.nick}</td>
+                                                    <td className="p-3 font-mono faceit-orange font-black">{u.elo}</td>
+                                                    <td className="p-3 flex gap-2">
+                                                        <button onClick={() => adminAction.setElo(u.nick, u.elo)} className="bg-blue-600/20 text-blue-400 px-2 py-1 rounded">+/-</button>
+                                                        <button onClick={() => adminAction.deleteUser(u.nick)} className="bg-red-600/20 text-red-500 px-2 py-1 rounded">✖</button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Bottom Navigation */}
+                    <nav className="fixed bottom-0 left-0 right-0 bg-[#0b0e12]/95 backdrop-blur-xl border-t border-gray-800 p-5 flex justify-around items-center z-50">
+                        <button onClick={() => setView('dashboard')} className={`flex flex-col items-center gap-1 ${view === 'dashboard' ? 'faceit-orange' : 'text-gray-600'}`}>
+                            <span className="text-xl">🏠</span>
+                            <span className="text-[8px] font-black uppercase italic tracking-[0.2em]">Главная</span>
+                        </button>
+                        <button onClick={() => setView('profile')} className={`flex flex-col items-center gap-1 ${view === 'profile' ? 'faceit-orange' : 'text-gray-600'}`}>
+                            <span className="text-xl">👤</span>
+                            <span className="text-[8px] font-black uppercase italic tracking-[0.2em]">Профиль</span>
+                        </button>
+                    </nav>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
