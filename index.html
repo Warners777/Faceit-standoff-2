@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FACEIT | Standoff 2 LIVE</title>
+    
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { background-color: #0b0e12; color: #e6edf3; font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .faceit-orange { color: #ff5500; }
+        .faceit-bg-orange { background-color: #ff5500; }
+        .glass-card { background: #161b22; border: 1px solid #30363d; }
+        .map-banned { opacity: 0.1; filter: grayscale(1); pointer-events: none; text-decoration: line-through; }
+        .map-picked { border: 2px solid #ff5500; transform: scale(1.05); box-shadow: 0 0 20px rgba(255, 85, 0, 0.4); }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        .searching-anim { animation: pulse 1.5s infinite; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Инициализация твоего Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyC1H45w4Z49Xc7O_WZotmUzbK9kUo0SQzw",
+            authDomain: "faceit-e10c4.firebaseapp.com",
+            projectId: "faceit-e10c4",
+            storageBucket: "faceit-e10c4.firebasestorage.app",
+            messagingSenderId: "700407767739",
+            appId: "1:700407767739:web:451dc4dc141517a8c3bf9e",
+            measurementId: "G-1RBVCHNC1T"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        const { useState, useEffect } = React;
+
+        const App = () => {
+            const MAPS = ["Sandstone", "Hanami", "Province", "Dune", "Breeze", "Zone7"];
+            const [myId] = useState("Player_" + Math.floor(Math.random() * 9000));
+            
+            const [view, setView] = useState('dashboard'); 
+            const [queue, setQueue] = useState({});
+            const [match, setMatch] = useState(null);
+            const [history, setHistory] = useState([]);
+            const [reports, setReports] = useState([]);
+
+            useEffect(() => {
+                // Слушаем очередь
+                db.ref('queue').on('value', snap => setQueue(snap.val() || {}));
+                
+                // Слушаем историю
+                db.ref('history').limitToLast(10).on('value', snap => {
+                    const data = [];
+                    snap.forEach(c => { data.unshift({id: c.key, ...c.val()}); });
+                    setHistory(data);
+                });
+
+                // Поиск матча для меня
+                db.ref('active_matches').on('value', snap => {
+                    let found = null;
+                    snap.forEach(c => {
+                        const m = c.val();
+                        if (m.players && m.players.includes(myId)) found = {id: c.key, ...m};
+                    });
+                    setMatch(found);
+                    if (found) setView('match_room');
+                });
+
+                // Для админа
+                db.ref('reports').on('value', snap => {
+                    const data = [];
+                    snap.forEach(c => { data.push({id: c.key, ...c.val()}); });
+                    setReports(data);
+                });
+            }, []);
+
+            const startSearch = () => {
+                const playersInQueue = Object.keys(queue);
+                // Если кто-то уже ищет, создаем матч на двоих (для теста)
+                if (playersInQueue.length >= 1 && !playersInQueue.includes(myId)) {
+                    const matchId = "match_" + Date.now();
+                    const players = [...playersInQueue, myId];
+                    db.ref('active_matches/' + matchId).set({
+                        players: players,
+                        bannedMaps: [],
+                        host: players[0],
+                        status: 'veto'
+                    });
+                    db.ref('queue').remove();
+                } else {
+                    db.ref('queue/' + myId).set(true);
+                    setView('searching');
+                }
+            };
+
+            const banMap = (mapName) => {
+                if (!match || (match.bannedMaps && match.bannedMaps.includes(mapName))) return;
+                const newBans = [...(match.bannedMaps || []), mapName];
+                db.ref(`active_matches/${match.id}/bannedMaps`).set(newBans);
+            };
+
+            const Dashboard = () => (
+                <div className="space-y-6 animate-in fade-in">
+                    <div className="glass-card rounded-2xl p-10 border-l-8 border-[#ff5500] relative overflow-hidden">
+                        <h2 className="text-4xl font-black italic uppercase mb-1">FACEIT LIVE</h2>
+                        <p className="text-gray-500 mb-8 font-bold text-[10px] uppercase tracking-widest">
+                            В поиске: {Object.keys(queue).length}
+                        </p>
+                        <button onClick={startSearch} className="faceit-bg-orange px-10 py-4 rounded font-black uppercase italic shadow-lg hover:scale-105 transition">
+                            Найти матч
+                        </button>
+                    </div>
+
+                    <div className="glass-card rounded-xl">
+                        <div className="p-4 border-b border-gray-800 bg-white/5 flex justify-between items-center">
+                            <span className="text-[10px] font-black uppercase text-gray-400">История</span>
+                            <button onClick={() => setView('report')} className="text-[10px] faceit-orange font-bold uppercase underline">Отправить счет</button>
+                        </div>
+                        <div className="divide-y divide-gray-800">
+                            {history.length === 0 ? <p className="p-8 text-center text-gray-700 uppercase text-xs font-bold italic">Игр пока нет</p> : 
+                            history.map(m => (
+                                <div key={m.id} className="p-4 flex justify-between items-center">
+                                    <span className="font-black uppercase text-sm italic">{m.map}</span>
+                                    <span className="font-mono text-xl font-black">{m.score}</span>
+                                    <span className={`font-bold text-[10px] ${m.win ? 'text-green-500' : 'text-red-500'}`}>{m.win ? 'WIN' : 'LOSS'}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const MatchRoom = () => {
+                const bans = match.bannedMaps || [];
+                const finalMap = MAPS.find(m => !bans.includes(m));
+                const isFinished = bans.length === MAPS.length - 1;
+
+                return (
+                    <div className="max-w-4xl mx-auto space-y-6 animate-in zoom-in">
+                        <div className="text-center">
+                            <h2 className="text-xl font-black uppercase italic">Match Room</h2>
+                            <p className="text-[#ff5500] text-[10px] font-bold uppercase tracking-widest italic">Phase: Map Veto</p>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                            {MAPS.map(m => (
+                                <div key={m} onClick={() => banMap(m)} className={`glass-card p-6 rounded-xl text-center cursor-pointer transition-all ${bans.includes(m) ? 'map-banned' : 'hover:border-[#ff5500]'} ${isFinished && finalMap === m ? 'map-picked' : ''}`}>
+                                    <p className="font-black uppercase italic text-sm">{m}</p>
+                                    {isFinished && finalMap === m && <p className="text-[10px] faceit-orange mt-2 font-bold animate-pulse">PLAYING</p>}
+                                </div>
+                            ))}
+                        </div>
+
+                        {isFinished && (
+                            <div className="glass-card p-6 rounded-2xl text-center border-2 border-[#ff5500]">
+                                <p className="text-[10px] font-bold text-gray-500 uppercase mb-1">Lobby Host</p>
+                                <p className="text-2xl font-black italic">{match.host}</p>
+                                <button onClick={() => {db.ref('active_matches/'+match.id).remove(); setView('dashboard');}} className="mt-4 text-[10px] text-gray-600 font-bold uppercase underline">Close Lobby</button>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            const Admin = () => {
+                const [pass, setPass] = useState("");
+                const approve = (m) => {
+                    db.ref('history').push(m);
+                    db.ref('reports/'+m.id).remove();
+                };
+
+                if (pass !== "1234") return (
+                    <div className="flex justify-center py-20"><input type="password" placeholder="Admin Pass" onChange={e=>setPass(e.target.value)} className="bg-black border border-gray-800 p-4 text-center rounded-xl outline-none focus:border-blue-500"/></div>
+                );
+
+                return (
+                    <div className="space-y-4 animate-in fade-in">
+                        <h2 className="text-xl font-black uppercase text-blue-400 italic">Moderation Queue</h2>
+                        {reports.length === 0 ? <p className="text-center py-20 text-gray-600 font-bold uppercase text-xs">No pending matches</p> : 
+                            reports.map(m => (
+                                <div key={m.id} className="glass-card p-6 rounded-xl flex justify-between items-center border-l-4 border-blue-500">
+                                    <div>
+                                        <p className="font-black uppercase italic text-lg">{m.map} - {m.score}</p>
+                                        <p className="text-[10px] text-blue-400 font-bold uppercase">Player: {m.player} | File: {m.evidence}</p>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => approve(m)} className="bg-green-600 px-4 py-2 rounded font-black text-[10px] uppercase">Approve</button>
+                                        <button onClick={() => db.ref('reports/'+m.id).remove()} className="bg-red-600 px-4 py-2 rounded font-black text-[10px] uppercase">Decline</button>
+                                    </div>
+                                </div>
+                            ))
+                        }
+                    </div>
+                );
+            };
+
+            const ReportForm = () => {
+                const [file, setFile] = useState(null);
+                const send = (e) => {
+                    e.preventDefault();
+                    const data = {
+                        map: e.target.map.value,
+                        score: e.target.s1.value + ":" + e.target.s2.value,
+                        win: parseInt(e.target.s1.value) > parseInt(e.target.s2.value),
+                        player: myId,
+                        evidence: file ? file.name : "no_screen.jpg"
+                    };
+                    db.ref('reports').push(data);
+                    alert("Sent for review!");
+                    setView('dashboard');
+                };
+
+                return (
+                    <div className="max-w-md mx-auto animate-in slide-in-from-bottom-4">
+                        <form onSubmit={send} className="glass-card p-8 rounded-2xl border-t-4 border-[#ff5500]">
+                            <h2 className="text-xl font-black uppercase mb-8 italic text-center">Submit Results</h2>
+                            <select name="map" required className="w-full bg-black p-4 rounded-xl mb-4 border border-gray-700 outline-none font-bold">
+                                <option value="">Select Map</option>
+                                {MAPS.map(m => <option key={m} value={m}>{m}</option>)}
+                            </select>
+                            <div className="flex gap-2 mb-4">
+                                <input name="s1" type="number" placeholder="You" required className="w-full bg-black p-4 rounded-xl border border-gray-700 text-center font-black text-xl"/>
+                                <input name="s2" type="number" placeholder="Enemy" required className="w-full bg-black p-4 rounded-xl border border-gray-700 text-center font-black text-xl"/>
+                            </div>
+                            <div className="border-2 border-dashed border-gray-700 p-6 rounded-xl mb-6 text-center bg-black/20 relative">
+                                <input type="file" required onChange={e => setFile(e.target.files[0])} className="absolute inset-0 opacity-0 cursor-pointer"/>
+                                <p className="text-[10px] font-bold uppercase text-gray-500">{file ? file.name : "Upload Screenshot"}</p>
+                            </div>
+                            <button type="submit" className="w-full faceit-bg-orange py-4 rounded-xl font-black uppercase italic shadow-lg shadow-[#ff5500]/20">Confirm Match</button>
+                        </form>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="min-h-screen flex flex-col pb-20">
+                    <nav className="p-6 flex justify-between items-center max-w-4xl mx-auto w-full">
+                        <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('dashboard')}>
+                            <div className="w-10 h-10 faceit-bg-orange rounded flex items-center justify-center font-black text-2xl italic shadow-lg">F</div>
+                            <span className="font-black text-xl uppercase italic tracking-tighter">Faceit Online</span>
+                        </div>
+                        <button onClick={() => setView('admin')} className="text-[10px] font-black uppercase text-gray-600">Admin</button>
+                    </nav>
+
+                    <main className="flex-1 max-w-4xl mx-auto w-full p-4">
+                        {view === 'dashboard' && <Dashboard />}
+                        {view === 'match_room' && <MatchRoom />}
+                        {view === 'admin' && <Admin />}
+                        {view === 'report' && <ReportForm />}
+                        {view === 'searching' && (
+                            <div className="flex flex-col items-center justify-center py-20 text-center animate-in fade-in">
+                                <div className="w-16 h-16 border-4 border-[#ff5500] border-t-transparent rounded-full animate-spin mb-8"></div>
+                                <h2 className="text-xl font-black uppercase italic searching-anim text-[#ff5500]">Searching...</h2>
+                                <p className="text-gray-500 mt-2 font-bold uppercase text-[10px]">Waiting for others ({Object.keys(queue).length}/2)</p>
+                                <button onClick={() => {db.ref('queue/'+myId).remove(); setView('dashboard');}} className="mt-10 text-red-500 text-[10px] font-black uppercase underline">Cancel</button>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Mobile Menu */}
+                    <div className="fixed bottom-0 left-0 right-0 bg-[#161b22] border-t border-gray-800 p-4 flex justify-around md:hidden z-50">
+                        <button onClick={() => setView('dashboard')} className="text-xl">🏠</button>
+                        <button onClick={() => setView('report')} className="text-xl">📸</button>
+                        <button onClick={() => setView('admin')} className="text-xl opacity-50">⚙️</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
